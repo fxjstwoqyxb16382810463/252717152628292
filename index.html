@@ -6,9 +6,6 @@
   <title>JILI SUPER ACE</title>
   <!-- Ensure assets resolve correctly under the repo subpath -->
   <base href="/Jili/">
-  <!-- Preload important assets -->
-  <link rel="preload" href="assets/cards/scatter-coin.svg?v=2" as="image" type="image/svg+xml">
-  <link rel="preload" href="assets/cards/ace.svg?v=2" as="image" type="image/svg+xml">
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
     html,body{height:100%;}
@@ -92,24 +89,49 @@
 
   <script type="module">
     // Minimal safe analytics load (non-blocking)
-    // (left as in-repo; don't block game)
     let analyticsMod=null, analytics=null;
     function safeLog(name, params={}){ try{ /* stub */ }catch(e){} }
 
-    // --- Game + reels ---
+    // --- Configuration & helpers ---
     const ASSET_SUFFIX = '?v=2';
+
+    // API root: change if your .svc files live under a subpath (e.g. '/helpcme/')
+    const API_ROOT = '/';
+    // svcUrl normalizes paths and strips mistaken "assets/cards/" prefix
+    function svcUrl(path) {
+      if (!path) return '';
+      path = String(path).trim();
+      path = path.replace(/^assets\/cards\//, ''); // remove bad prefix if present
+      const root = API_ROOT.replace(/\/$/, '');
+      const p = path.replace(/^\//, '');
+      return root + '/' + p;
+    }
+
+    // helper: create a simple inline card SVG data URL (colored background + initial)
+    function svgDataUrlFor(name, size = 256, bg = '#2a1a52', fg = '#ffd700') {
+      const initial = (name && name[0]) ? name[0].toUpperCase() : '?';
+      const fontSize = Math.floor(size * 0.36);
+      const svg =
+        `<svg xmlns='http://www.w3.org/2000/svg' width='${size}' height='${size}' viewBox='0 0 ${size} ${size}'>` +
+        `<rect width='100%' height='100%' fill='${bg}' rx='20' ry='20'/>` +
+        `<text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-family='Arial, Helvetica, sans-serif' font-size='${fontSize}' fill='${fg}'>${initial}</text>` +
+        `</svg>`;
+      return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+    }
+
+    // --- Game + reels ---
     const SYMBOL_POOL = [
-      {id:'ace', name:'Ace', file:'assets/cards/ace.svg', weight:6, type:'face'},
-      {id:'king',name:'King', file:'assets/cards/king.svg', weight:3, type:'face'},
-      {id:'queen',name:'Queen', file:'assets/cards/queen.svg', weight:3, type:'face'},
-      {id:'jack',name:'Jack', file:'assets/cards/jack.svg', weight:3, type:'face'},
-      {id:'spade',name:'Spade', file:'assets/cards/speed.svg', weight:2, type:'symbol'},
-      {id:'diamond',name:'Diamond', file:'assets/cards/diamond.svg', weight:2, type:'symbol'},
-      {id:'heart',name:'Heart', file:'assets/cards/heart.svg', weight:2, type:'symbol'},
-      {id:'clubs',name:'Clubs', file:'assets/cards/clubs.svg', weight:2, type:'symbol'}
+      {id:'ace', name:'Ace', file:'', weight:6, type:'face'},
+      {id:'king',name:'King', file:'', weight:3, type:'face'},
+      {id:'queen',name:'Queen', file:'', weight:3, type:'face'},
+      {id:'jack',name:'Jack', file:'', weight:3, type:'face'},
+      {id:'spade',name:'Spade', file:'', weight:2, type:'symbol'},
+      {id:'diamond',name:'Diamond', file:'', weight:2, type:'symbol'},
+      {id:'heart',name:'Heart', file:'', weight:2, type:'symbol'},
+      {id:'clubs',name:'Clubs', file:'', weight:2, type:'symbol'}
     ];
-    const WILD = {id:'wild', name:'Wild', file:'assets/cards/wild.svg', weight:0.1, type:'wild'};
-    const SCATTER = {id:'scatter', name:'Scatter', file:'assets/cards/scatter-coin.svg', weight:0.05, type:'scatter'};
+    const WILD = {id:'wild', name:'Wild', file:'', weight:0.1, type:'wild'};
+    const SCATTER = {id:'scatter', name:'Scatter', file:'', weight:0.05, type:'scatter'};
     const REELS=5, ROWS=4;
 
     function buildWeightedPool(){
@@ -146,10 +168,22 @@
     function setImageWithFallback(img,s){
       img.dataset.id = s.id;
       img.alt = s.name;
-      const suffix = ASSET_SUFFIX;
-      img.src = s.file + suffix;
-      img.onerror = ()=>{ /* fallback to a colored block */ img.style.display='none'; };
       img.style.display='block';
+      const suffix = ASSET_SUFFIX;
+
+      if (s.file && s.file.trim()) {
+        img.onerror = null;
+        img.src = s.file + suffix;
+        img.onerror = () => {
+          img.onerror = null;
+          img.src = svgDataUrlFor(s.name);
+          img.style.display = 'block';
+        };
+      } else {
+        // no external file — use generated SVG fallback directly
+        img.onerror = null;
+        img.src = svgDataUrlFor(s.name);
+      }
     }
 
     function randomizeReels(){
@@ -171,7 +205,9 @@
 
     function updateUI(){
       document.getElementById('balance').textContent = gameState.balance;
-      document.getElementById('totalWins').textContent = gameState.totalWins;
+      // totalWins element may not exist; guard
+      const tw = document.getElementById('totalWins');
+      if(tw) tw.textContent = gameState.totalWins;
       document.getElementById('betDisplay').textContent = gameState.bet;
       document.getElementById('betAmount').textContent = gameState.bet;
       document.getElementById('autoBtn').textContent = `🔁 Auto: ${gameState.auto? 'On' : 'Off'}`;
@@ -188,7 +224,18 @@
     // --- Particle system (canvas) ---
     const canvas = document.getElementById('coinLayer'); const ctx = canvas.getContext('2d'); let cw=0,ch=0; function resizeCanvas(){ cw = canvas.width = canvas.clientWidth; ch = canvas.height = canvas.clientHeight; }
     window.addEventListener('resize', resizeCanvas);
-    const coinImg = new Image(); coinImg.src = 'assets/cards/scatter-coin.svg' + ASSET_SUFFIX;
+    // coin image: try to load external coin; otherwise use generated coin SVG
+    const coinImg = new Image();
+    coinImg.src = 'assets/cards/scatter-coin.svg' + ASSET_SUFFIX;
+    coinImg.onerror = () => {
+      coinImg.onerror = null;
+      const coinSvg = `<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'>` +
+                      `<circle cx='32' cy='32' r='28' fill='#ffd700'/>` +
+                      `<circle cx='32' cy='32' r='18' fill='#ffcc33'/>` +
+                      `</svg>`;
+      coinImg.src = 'data:image/svg+xml;utf8,' + encodeURIComponent(coinSvg);
+    };
+
     const MAX_PARTICLES = 40; const particlePool=[]; const particles=[]; for(let i=0;i<MAX_PARTICLES;i++) particlePool.push({alive:false,x:0,y:0,vx:0,vy:0,rot:0,vr:0,alpha:1,size:24});
     let particlesEnabled = (localStorage.getItem('particlesEnabled') !== 'false');
     const toggleBtn = document.getElementById('particleToggle'); toggleBtn.textContent = `✨ Particles: ${particlesEnabled? 'On' : 'Off'}`;
