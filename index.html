@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>JILI SUPER ACE</title>
+  <!-- Ensure assets resolve correctly under the repo subpath -->
+  <base href="/Jili/">
+  <!-- Preload important assets -->
+  <link rel="preload" href="assets/cards/scatter-coin.svg?v=2" as="image" type="image/svg+xml">
+  <link rel="preload" href="assets/cards/ace.svg?v=2" as="image" type="image/svg+xml">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    html,body{height:100%;}
+    body{font-family:Arial,Helvetica,sans-serif;background:linear-gradient(135deg,#0d0221,#1a0033);color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;overflow-x:hidden}
+
+    /* container sizing fixed and responsive */
+    .game{max-width:920px;width:100%;box-sizing:border-box;background:linear-gradient(180deg,#1a0033,#0d0221);color:#fff;border:4px solid #ffd700;padding:18px;border-radius:16px;position:relative;overflow:hidden}
+
+    .header{text-align:center;color:#ffd700;margin-bottom:12px;z-index:40;position:relative}
+    .reels-wrap{position:relative;z-index:10}
+    .reels{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;background:rgba(0,0,0,0.05);padding:12px;border-radius:12px}
+
+    /* allow flex/grid children to shrink on small screens */
+    .reel, .cell { min-width: 0; }
+    .reel{display:flex;flex-direction:column;gap:8px}
+    .cell{aspect-ratio:3/4;background:linear-gradient(135deg,#2a1a52,#1a0a32);border:2px solid #ff6600;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:2rem;overflow:hidden}
+
+    /* make images fully responsive inside their cells */
+    .cell img{max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;border-radius:8px;display:block}
+    .cell.wild{box-shadow:0 0 20px #00ff88}
+    .cell.scatter{box-shadow:0 0 20px #ffaa00}
+    .cell.winning{animation:glow .6s ease-in-out infinite;border-color:#ffff00}
+    @keyframes glow{0%{filter:drop-shadow(0 0 8px #ffd700)}50%{filter:drop-shadow(0 0 28px #ffd700)}100%{filter:drop-shadow(0 0 8px #ffd700)}}
+
+    /* Particle canvas sits above reels but below header controls; pointer-events disabled so it doesn't block clicks */
+    #coinLayer{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:20}
+
+    .controls{display:flex;gap:10px;justify-content:center;margin-top:12px;z-index:40;position:relative}
+    button{padding:12px 18px;border-radius:10px;border:0;background:#ff6600;color:#fff;font-weight:700;cursor:pointer}
+    .stats{display:flex;gap:12px;justify-content:center;margin-bottom:12px;flex-wrap:wrap}
+    .stat{background:rgba(255,215,0,0.06);padding:8px 12px;border-radius:8px;color:#ffd700}
+
+    .bet-controls{display:flex;gap:8px;align-items:center}
+    .bet-controls button{padding:6px 10px;border-radius:6px;background:#222;color:#fff;border:1px solid #444}
+    .bet-display{background:rgba(0,0,0,0.25);padding:6px 10px;border-radius:6px;color:#fff;font-weight:700}
+
+    /* motion preference: disable particle animations for reduced motion */
+    @media (prefers-reduced-motion: reduce) { #coinLayer{display:none} }
+
+    /* small screens */
+    @media (max-width:600px){.game{padding:12px}.cell{font-size:1.2rem}.reels{gap:6px;padding:8px}}
+
+    /* Accessible live region (hidden visually) */
+    .sr-only{position:absolute!important;height:1px;width:1px;overflow:hidden;clip:rect(1px,1px,1px,1px);white-space:nowrap}
+  </style>
+</head>
+<body>
+  <div class="game" role="application">
+    <canvas id="coinLayer" aria-hidden="true"></canvas>
+
+    <div class="header">
+      <h1>🎰 JILI SUPER ACE</h1>
+      <div style="color:#ffb366">Polished particle effects & accessibility</div>
+    </div>
+
+    <div class="stats" aria-live="polite">
+      <div class="stat">Balance: <span id="balance">5000</span></div>
+      <div class="stat">Bet: <span id="betDisplay">10</span></div>
+      <div class="stat">Free Spins: <span id="freeSpins">0</span></div>
+    </div>
+
+    <div class="reels-wrap">
+      <div class="reels" id="reels" aria-hidden="false"></div>
+    </div>
+
+    <div class="controls">
+      <div class="bet-controls">
+        <button id="betDec" aria-label="Decrease bet">−</button>
+        <div class="bet-display" id="betAmount">10</div>
+        <button id="betInc" aria-label="Increase bet">+</button>
+      </div>
+
+      <button id="spinBtn">🎯 SPIN</button>
+      <button id="turboBtn">⚡ TURBO</button>
+      <button id="autoBtn">🔁 Auto: Off</button>
+      <button id="particleToggle">✨ Particles: On</button>
+    </div>
+
+    <div class="sr-only" aria-live="assertive" id="srAnnounce"></div>
+  </div>
+
+  <script type="module">
+    // Minimal safe analytics load (non-blocking)
+    // (left as in-repo; don't block game)
+    let analyticsMod=null, analytics=null;
+    function safeLog(name, params={}){ try{ /* stub */ }catch(e){} }
+
+    // --- Game + reels ---
+    const ASSET_SUFFIX = '?v=2';
+    const SYMBOL_POOL = [
+      {id:'ace', name:'Ace', file:'assets/cards/ace.svg', weight:6, type:'face'},
+      {id:'king',name:'King', file:'assets/cards/king.svg', weight:3, type:'face'},
+      {id:'queen',name:'Queen', file:'assets/cards/queen.svg', weight:3, type:'face'},
+      {id:'jack',name:'Jack', file:'assets/cards/jack.svg', weight:3, type:'face'},
+      {id:'spade',name:'Spade', file:'assets/cards/speed.svg', weight:2, type:'symbol'},
+      {id:'diamond',name:'Diamond', file:'assets/cards/diamond.svg', weight:2, type:'symbol'},
+      {id:'heart',name:'Heart', file:'assets/cards/heart.svg', weight:2, type:'symbol'},
+      {id:'clubs',name:'Clubs', file:'assets/cards/clubs.svg', weight:2, type:'symbol'}
+    ];
+    const WILD = {id:'wild', name:'Wild', file:'assets/cards/wild.svg', weight:0.1, type:'wild'};
+    const SCATTER = {id:'scatter', name:'Scatter', file:'assets/cards/scatter-coin.svg', weight:0.05, type:'scatter'};
+    const REELS=5, ROWS=4;
+
+    function buildWeightedPool(){
+      const pool=[];
+      SYMBOL_POOL.forEach(s=>{
+        const n = Math.max(1, Math.round(s.weight * 10));
+        for(let i=0;i<n;i++) pool.push(s);
+      });
+      // add a few wilds/scatters
+      const wildCount = Math.max(1, Math.round(WILD.weight * 10));
+      for(let i=0;i<wildCount;i++) pool.push(WILD);
+      const scatterCount = Math.max(1, Math.round(SCATTER.weight * 10));
+      for(let i=0;i<scatterCount;i++) pool.push(SCATTER);
+      return pool;
+    }
+    const WEIGHTED = buildWeightedPool();
+    function weightedPick(){ return WEIGHTED[Math.floor(Math.random()*WEIGHTED.length)]; }
+
+    const gameState = { balance:5000, bet:10, multiplier:1, isSpinning:false, totalWins:0, auto:false, freeSpins:0 };
+
+    function initReels(){ const container=document.getElementById('reels'); container.innerHTML='';
+      for(let c=0;c<REELS;c++){ const col=document.createElement('div'); col.className='reel'; col.id=`reel-${c}`;
+        for(let r=0;r<ROWS;r++){ const cell=document.createElement('div'); cell.className='cell'; cell.id=`symbol-${c}-${r}`;
+          const img=document.createElement('img'); img.className='card-image';
+          img.alt='';
+          cell.appendChild(img);
+          col.appendChild(cell);
+        }
+        container.appendChild(col);
+      }
+      randomizeReels();
+    }
+
+    function setImageWithFallback(img,s){
+      img.dataset.id = s.id;
+      img.alt = s.name;
+      const suffix = ASSET_SUFFIX;
+      img.src = s.file + suffix;
+      img.onerror = ()=>{ /* fallback to a colored block */ img.style.display='none'; };
+      img.style.display='block';
+    }
+
+    function randomizeReels(){
+      for(let c=0;c<REELS;c++){
+        for(let r=0;r<ROWS;r++){
+          const el=document.getElementById(`symbol-${c}-${r}`);
+          if(!el) continue;
+          const img = el.querySelector('img');
+          const s = weightedPick();
+          el.classList.remove('wild','scatter','winning');
+          if(s.type==='wild') el.classList.add('wild');
+          if(s.type==='scatter') el.classList.add('scatter');
+          setImageWithFallback(img, s);
+        }
+      }
+    }
+
+    function getSymbolIdAt(c,r){ const img=document.querySelector(`#symbol-${c}-${r} img`); return img&&img.dataset?img.dataset.id:null; }
+
+    function updateUI(){
+      document.getElementById('balance').textContent = gameState.balance;
+      document.getElementById('totalWins').textContent = gameState.totalWins;
+      document.getElementById('betDisplay').textContent = gameState.bet;
+      document.getElementById('betAmount').textContent = gameState.bet;
+      document.getElementById('autoBtn').textContent = `🔁 Auto: ${gameState.auto? 'On' : 'Off'}`;
+      document.getElementById('freeSpins').textContent = gameState.freeSpins;
+    }
+
+    // --- Accessibility announcement ---
+    function announce(text){ const sr=document.getElementById('srAnnounce'); sr.textContent=''; setTimeout(()=>sr.textContent=text,50); }
+
+    // --- Sound manager minimal ---
+    let audioCtx=null; function ensureAudio(){ if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }
+    function beep(freq=600,dur=0.08,vol=0.2){ if(!audioCtx) return; const o=audioCtx.createOscillator(); const g=audioCtx.createGain(); o.type='sine'; o.frequency.value=freq; g.gain.value=vol; o.connect(g); g.connect(audioCtx.destination); o.start(); setTimeout(()=>{ o.stop(); g.disconnect(); }, dur*1000); }
+
+    // --- Particle system (canvas) ---
+    const canvas = document.getElementById('coinLayer'); const ctx = canvas.getContext('2d'); let cw=0,ch=0; function resizeCanvas(){ cw = canvas.width = canvas.clientWidth; ch = canvas.height = canvas.clientHeight; }
+    window.addEventListener('resize', resizeCanvas);
+    const coinImg = new Image(); coinImg.src = 'assets/cards/scatter-coin.svg' + ASSET_SUFFIX;
+    const MAX_PARTICLES = 40; const particlePool=[]; const particles=[]; for(let i=0;i<MAX_PARTICLES;i++) particlePool.push({alive:false,x:0,y:0,vx:0,vy:0,rot:0,vr:0,alpha:1,size:24});
+    let particlesEnabled = (localStorage.getItem('particlesEnabled') !== 'false');
+    const toggleBtn = document.getElementById('particleToggle'); toggleBtn.textContent = `✨ Particles: ${particlesEnabled? 'On' : 'Off'}`;
+
+    function spawnCoin(x,y,force=1){ if(window.matchMedia('(prefers-reduced-motion: reduce)').matches) return; if(!particlesEnabled) return; const p = particlePool.find(p=>!p.alive); if(!p) return; p.alive=true; p.x=x; p.y=y; p.vx=(Math.random()-0.5)*6*force; p.vy=-2 - Math.random()*6*force; p.rot=Math.random()*Math.PI; p.vr=(Math.random()-0.5)*0.2; p.alpha=1; p.size=16+Math.random()*18; particles.push(p); }
+    function emitRandomCoins(count=6){ for(let i=0;i<count;i++){ const rx = (0.2+Math.random()*0.6)*cw; const ry = ch*0.1 + Math.random()*ch*0.3; spawnCoin(rx,ry,1+Math.random()*0.6); } }
+    function updateParticles(dt){ for(let i=particles.length-1;i>=0;i--){ const p=particles[i]; p.vy += 0.12 * dt; p.x += p.vx * dt * 8; p.y += p.vy * dt * 8; p.rot += p.vr * dt; p.alpha -= 0.01*dt; if(p.y>ch+50 || p.alpha<=0){ p.alive=false; particles.splice(i,1); particlePool.push(p); } } }
+    function drawParticles(){ ctx.clearRect(0,0,cw,ch); for(const p of particles){ ctx.save(); ctx.globalAlpha = Math.max(0,p.alpha); ctx.translate(p.x,p.y); ctx.rotate(p.rot); if(coinImg.complete) ctx.drawImage(coinImg,-p.size/2,-p.size/2,p.size,p.size); ctx.restore(); } }
+    let last = performance.now(); function tick(now){ const dt = Math.min(60, now - last) / 16.67; last = now; updateParticles(dt); drawParticles(); requestAnimationFrame(tick); }
+    resizeCanvas(); requestAnimationFrame(tick);
+    let bgEmitInterval = setInterval(()=>{ if(particlesEnabled) emitRandomCoins(4); }, 3000);
+    toggleBtn.addEventListener('click', ()=>{ particlesEnabled = !particlesEnabled; localStorage.setItem('particlesEnabled', particlesEnabled); toggleBtn.textContent = `✨ Particles: ${particlesEnabled? 'On' : 'Off'}`; });
+    function celebrateWin(){ emitRandomCoins(14); }
+
+    // --- Win detection ---
+    function checkWins(){
+      // Simple horizontal 3-in-row detection + scatter/wild counters
+      let totalWin=0;
+      const winners = new Set();
+      for(let r=0;r<ROWS;r++){
+        for(let c=0;c<=REELS-3;c++){
+          const ids = [getSymbolIdAt(c,r), getSymbolIdAt(c+1,r), getSymbolIdAt(c+2,r)];
+          if(!ids[0] || !ids[1] || !ids[2]) continue;
+          // treat wild as matching anything
+          if(ids.every(id=> id===ids[0] || id==='wild')){
+            // reward depends on symbol
+            const base = (ids[0]==='ace' || ids[1]==='ace')? 20 : 5;
+            totalWin += base * gameState.bet;
+            // mark elements
+            for(let k=0;k<3;k++) winners.add(`symbol-${c+k}-${r}`);
+          }
+        }
+      }
+      // counts
+      let scatterCount=0, wildCount=0, aceCount=0;
+      for(let c=0;c<REELS;c++) for(let r=0;r<ROWS;r++){
+        const id = getSymbolIdAt(c,r);
+        if(!id) continue;
+        if(id==='scatter') scatterCount++;
+        if(id==='wild') wildCount++;
+        if(id==='ace') aceCount++;
+      }
+      if(scatterCount>=3){
+        // Award free spins instead of direct coin bonus
+        gameState.freeSpins += 10;
+        announce(`You've won 10 Free Spins!`);
+        celebrateWin();
+        beep(1000,0.12,0.18);
+      }
+      if(wildCount>=3){ const bonus = gameState.bet * 80; totalWin += bonus; announce(`Wild bonus ${bonus}`); }
+      if(aceCount>=5){ const bonus = gameState.bet * 200; totalWin += bonus; announce(`SUPER ACE! ${bonus}`); }
+
+      // apply winning class to elements
+      winners.forEach(id=>{ const el=document.getElementById(id); if(el) el.classList.add('winning'); });
+      return Math.floor(totalWin);
+    }
+
+    // --- Spin logic ---
+    function wait(ms){ return new Promise(res=>setTimeout(res, ms)); }
+
+    async function spin(isTurbo=false){
+      if(gameState.isSpinning) return; // avoid concurrent
+      const isFree = gameState.freeSpins > 0;
+      if(!isFree && gameState.bet > gameState.balance){ announce('Insufficient balance'); return; }
+      gameState.isSpinning = true;
+      const actualBet = gameState.bet;
+      if(!isFree){ gameState.balance -= actualBet; }
+      else{ gameState.freeSpins -= 1; announce('Using a Free Spin'); }
+      updateUI();
+      announce(`Spinning bet ${isFree? 'FREE' : actualBet}`);
+      safeLog('spin_start',{bet:actualBet, balance:gameState.balance, free:isFree});
+
+      // play spin sound
+      soundSpin(isTurbo);
+
+      // simple animation: cycle random symbols for duration, stop reels staggered
+      const spinDuration = isTurbo? 500 : 1400; // total length
+      const reelStopDelays = [0, 120, 260, 400, 540];
+      // start cycling
+      const start = performance.now();
+      const endTimes = reelStopDelays.map(d => start + spinDuration + d);
+
+      // for each reel, cycle images until its end time
+      const cyclePromises = [];
+      for(let c=0;c<REELS;c++){
+        cyclePromises.push((async ()=>{
+          const elCol = document.getElementById(`reel-${c}`);
+          const imgEls = Array.from(elCol.querySelectorAll('img'));
+          while(performance.now() < endTimes[c]){
+            // replace each cell with a random symbol
+            for(const img of imgEls){ const s = weightedPick(); setImageWithFallback(img,s); const parent = img.parentElement; parent.classList.toggle('wild', s.type==='wild'); parent.classList.toggle('scatter', s.type==='scatter'); }
+            await wait(60); // frame
+          }
+          // finalise reel with random symbols (could be weighted differently)
+          for(const img of imgEls){ const s = weightedPick(); setImageWithFallback(img,s); const parent = img.parentElement; parent.classList.toggle('wild', s.type==='wild'); parent.classList.toggle('scatter', s.type==='scatter'); parent.classList.remove('winning'); }
+        })());
+      }
+
+      await Promise.all(cyclePromises);
+
+      // determine wins
+      const win = checkWins();
+      if(win>0){ gameState.balance += win; gameState.totalWins += win; celebrateWin(); beep(880,0.12,0.2); announce(`You won ${win}`); safeLog('spin_win',{bet:actualBet, win}); }
+      else { announce('No win'); safeLog('spin_loss',{bet:actualBet}); }
+
+      updateUI();
+      gameState.isSpinning = false;
+
+      // auto-spin: continue if auto is on and either have free spins or enough balance
+      if(gameState.auto && (gameState.freeSpins > 0 || gameState.balance >= gameState.bet)){ await wait(300); spin(isTurbo); }
+    }
+
+    function soundSpin(isTurbo){ try{ ensureAudio(); for(let i=0;i<4;i++) setTimeout(()=>beep(360 + i*40, 0.06, 0.06), i * (isTurbo?30:80)); }catch(e){} }
+
+    // --- UI bindings ---
+    document.getElementById('spinBtn').addEventListener('click',()=>spin(false));
+    document.getElementById('turboBtn').addEventListener('click',()=>spin(true));
+    document.getElementById('particleToggle').addEventListener('click',()=>{ particlesEnabled = !particlesEnabled; localStorage.setItem('particlesEnabled', particlesEnabled); toggleBtn.textContent = `✨ Particles: ${particlesEnabled? 'On' : 'Off'}`; });
+
+    document.getElementById('betInc').addEventListener('click',()=>{ gameState.bet = Math.min(gameState.balance, Math.max(1, gameState.bet * 2)); updateUI(); });
+    document.getElementById('betDec').addEventListener('click',()=>{ gameState.bet = Math.max(1, Math.floor(gameState.bet/2)); updateUI(); });
+
+    document.getElementById('autoBtn').addEventListener('click',()=>{ gameState.auto = !gameState.auto; updateUI(); if(gameState.auto && !gameState.isSpinning){ spin(false); } });
+
+    // init
+    initReels(); updateUI(); safeLog('game_start',{balance:gameState.balance});
+  </script>
+</body>
+</html>
